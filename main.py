@@ -14,6 +14,9 @@ class ItemCreate(ItemBase):
 class Item(ItemBase):
     id: int = Field(..., gt=0)
 
+class ItemUpdate(ItemBase):    
+    title: str | None = None
+    done: bool | None = None
 
 app = FastAPI(
     title="My Inventory API",
@@ -64,4 +67,21 @@ def create_item(item_data: ItemCreate):
     items.append(new_item)
     return new_item
 
+@app.put("/items/{item_id}", response_model=Item, description="Update an existing inventory item.")
+def update_item(item_id: int, item_data: ItemCreate):
+    for index, item in enumerate(items):
+        if item.id == item_id:
+            updated_item = Item(id=item_id, name=item_data.name, quantity=item_data.quantity)
+            items[index] = updated_item
+            return updated_item
 
+    raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+
+@app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT, description="Delete an inventory item.")
+def delete_item(item_id: int):
+    for index, item in enumerate(items):
+        if item.id == item_id:
+            del items[index]
+            return None
+
+    raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
