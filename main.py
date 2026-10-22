@@ -1,6 +1,43 @@
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+import sqlite3
+from pathlib import Path
 
+DATABASE_PATH = Path(__file__).resolve().parent / "inventory.db"
+
+
+def get_connection():
+    connection = sqlite3.connect(DATABASE_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def initialize_database():
+    with get_connection() as connection:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                quantity INTEGER NOT NULL CHECK (quantity >= 0)
+            )
+        """)
+
+        count = connection.execute(
+            "SELECT COUNT(*) FROM items"
+        ).fetchone()[0]
+
+        if count == 0:
+            connection.executemany(
+                "INSERT INTO items (name, quantity) VALUES (?, ?)",
+                [
+                    ("Dell Laptop", 10),
+                    ("HP Laptop", 5),
+                    ("Lenovo Laptop", 8),
+                ],
+            )
+
+
+initialize_database()
 
 class ItemBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
