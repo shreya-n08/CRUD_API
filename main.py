@@ -82,19 +82,47 @@ def read_root():
 def health_check():
     return {"status": "ok"}
 
-
-@app.get("/items", response_model=list[Item], description="Get a list of all inventory items.")
+@app.get(
+    "/items",
+    response_model=list[Item],
+    description="Get a list of all inventory items.",
+)
 def get_items():
-    return items
+    connection = get_connection()
+
+    try:
+        rows = connection.execute(
+            "SELECT id, name, quantity FROM items ORDER BY id"
+        ).fetchall()
+
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
 
 
-@app.get("/items/{item_id}", response_model=Item, description="Get a specific inventory item by its ID.")
+@app.get(
+    "/items/{item_id}",
+    response_model=Item,
+    description="Get a specific inventory item by its ID.",
+)
 def get_item(item_id: int):
-    for item in items:
-        if item.id == item_id:
-            return item
+    connection = get_connection()
 
-    raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+    try:
+        row = connection.execute(
+            "SELECT id, name, quantity FROM items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Item {item_id} not found",
+            )
+
+        return dict(row)
+    finally:
+        connection.close()
 
 
 @app.post("/items", response_model=Item, status_code=status.HTTP_201_CREATED, description="Create an item")
