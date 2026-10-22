@@ -124,13 +124,32 @@ def get_item(item_id: int):
     finally:
         connection.close()
 
-
-@app.post("/items", response_model=Item, status_code=status.HTTP_201_CREATED, description="Create an item")
+@app.post(
+    "/items",
+    response_model=Item,
+    status_code=status.HTTP_201_CREATED,
+    description="Create an item",
+)
 def create_item(item_data: ItemCreate):
-    new_id = max((item.id for item in items), default=0) + 1
-    new_item = Item(id=new_id, name=item_data.name, quantity=item_data.quantity)
-    items.append(new_item)
-    return new_item
+    connection = get_connection()
+
+    try:
+        cursor = connection.execute(
+            "INSERT INTO items (name, quantity) VALUES (?, ?)",
+            (item_data.name, item_data.quantity),
+        )
+        new_id = cursor.lastrowid
+
+        row = connection.execute(
+            "SELECT id, name, quantity FROM items WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+
+        connection.commit()
+        return dict(row)
+    finally:
+        connection.close()
+
 
 @app.put("/items/{item_id}", response_model=Item, description="Update an existing inventory item.")
 def update_item(item_id: int, item_data: ItemCreate):
