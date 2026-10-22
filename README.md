@@ -216,3 +216,61 @@ Through this project, I practised:
 
 ---
 
+
+## SQLite Database
+
+This project uses SQLite to store inventory items persistently. Unlike an in-memory Python list, SQLite keeps the data saved between application restarts.
+
+### Database Details
+- **Database file:** `inventory.db`
+- **Table:** `items`
+- **Columns:** `id`, `name`, `quantity`
+- The database file is generated automatically when the application starts.
+- The local database file is excluded from Git.
+
+### Run the Project
+
+1. Activate the project's virtual environment.
+2. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Start the FastAPI server:
+
+   ```bash
+   uvicorn main:app --reload
+   ```
+
+4. Open the API documentation at `http://127.0.0.1:8000/docs`.
+
+### Example SQL Queries
+
+View all inventory items:
+
+```sql
+SELECT * FROM items;
+```
+
+Find items with available stock:
+
+```sql
+SELECT * FROM items WHERE quantity > 0;
+```
+
+Count inventory items:
+
+```sql
+SELECT COUNT(*) FROM items;
+```
+
+Update an item's quantity:
+
+```sql
+UPDATE items SET quantity = 20 WHERE id = 2;
+```
+
+The API provides create, read, update, and delete operations for inventory items using SQLite.
+
+
