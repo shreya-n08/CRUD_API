@@ -151,21 +151,61 @@ def create_item(item_data: ItemCreate):
         connection.close()
 
 
-@app.put("/items/{item_id}", response_model=Item, description="Update an existing inventory item.")
+
+@app.put(
+    "/items/{item_id}",
+    response_model=Item,
+    description="Update an existing inventory item.",
+)
 def update_item(item_id: int, item_data: ItemCreate):
-    for index, item in enumerate(items):
-        if item.id == item_id:
-            updated_item = Item(id=item_id, name=item_data.name, quantity=item_data.quantity)
-            items[index] = updated_item
-            return updated_item
+    connection = get_connection()
 
-    raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+    try:
+        cursor = connection.execute(
+            "UPDATE items SET name = ?, quantity = ? WHERE id = ?",
+            (item_data.name, item_data.quantity, item_id),
+        )
 
-@app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT, description="Delete an inventory item.")
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Item {item_id} not found",
+            )
+
+        connection.commit()
+
+        row = connection.execute(
+            "SELECT id, name, quantity FROM items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+
+        return dict(row)
+    finally:
+        connection.close()
+
+
+
+@app.delete(
+    "/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    description="Delete an inventory item.",
+)
 def delete_item(item_id: int):
-    for index, item in enumerate(items):
-        if item.id == item_id:
-            del items[index]
-            return None
+    connection = get_connection()
 
-    raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+    try:
+        cursor = connection.execute(
+            "DELETE FROM items WHERE id = ?",
+            (item_id,),
+        )
+
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Item {item_id} not found",
+            )
+
+        connection.commit()
+        return None
+    finally:
+        connection.close()
