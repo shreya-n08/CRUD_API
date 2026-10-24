@@ -1,0 +1,16 @@
+
+services:
+  api:
+    build: .
+    container_name: inventory-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/inventory.db
+    volumes:
+      - inventory_data:/data
+
+volumes:
+  inventory_data:

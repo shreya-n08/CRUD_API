@@ -1,9 +1,12 @@
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 import sqlite3
+import os
 from pathlib import Path
 
-DATABASE_PATH = Path(__file__).resolve().parent / "inventory.db"
+
+DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "inventory.db"
+DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(DEFAULT_DATABASE_PATH)))
 
 
 def get_connection():
@@ -51,9 +54,8 @@ class ItemCreate(ItemBase):
 class Item(ItemBase):
     id: int = Field(..., gt=0)
 
-class ItemUpdate(ItemBase):    
-    title: str | None = None
-    done: bool | None = None
+class ItemUpdate(ItemBase):
+    pass
 
 app = FastAPI(
     title="My Inventory API",
