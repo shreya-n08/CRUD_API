@@ -1,4 +1,5 @@
-
+import re
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, ValidationError
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -160,6 +161,87 @@ def extract_book(
     }
 
 
+class BookRecord(BaseModel):
+    """Validated, normalized book record."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    product_url: HttpUrl
+    price_text: str = Field(min_length=1)
+    price_gbp: float = Field(ge=0)
+    availability_text: str = Field(min_length=1)
+    rating_text: str = Field(min_length=1)
+    description: str | None
+    source_page: HttpUrl
+    fetched_at: datetime
+
+
+def normalize_price(price_text: str) -> float:
+    """Convert a price such as £51.77 into a numeric GBP value."""
+    match = re.search(r"\d+(?:\.\d{1,2})?", price_text.replace(",", ""))
+
+    if not match:
+        raise ValueError(f"Could not parse price: {price_text!r}")
+
+    return float(match.group())
+
+
+def validate_raw_books(raw_books: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Validate records, remove duplicate URLs, and collect errors."""
+    valid_books = []
+    errors = []
+    seen_urls = set()
+
+    for index, raw_book in enumerate(raw_books, start=1):
+        try:
+            normalized = {
+                **raw_book,
+                "price_gbp": normalize_price(raw_book["price_text"]),
+            }
+            book = BookRecord.model_validate(normalized)
+            record = book.model_dump(mode="json")
+
+            # Use a canonical URL string as the record identity.
+            product_url = str(book.product_url)
+            if product_url in seen_urls:
+                errors.append({
+                    "record_index": index,
+                    "product_url": product_url,
+                    "reason": "Duplicate product_url",
+                })
+                continue
+
+            seen_urls.add(product_url)
+            valid_books.append(record)
+
+        except (ValidationError, ValueError, KeyError, TypeError) as exc:
+            errors.append({
+                "record_index": index,
+                "product_url": raw_book.get("product_url"),
+                "reason": str(exc),
+            })
+
+    return valid_books, errors
+
+
+def save_validated_books(
+    valid_books: list[dict],
+    errors: list[dict],
+) -> None:
+    """Save validated records and validation errors as JSON."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    (OUTPUT_DIR / "books.json").write_text(
+        json.dumps(valid_books, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (OUTPUT_DIR / "errors.json").write_text(
+        json.dumps(errors, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     catalogue_pages = discover_catalogue_pages()
     discovered_books = discover_book_urls(catalogue_pages)
@@ -190,6 +272,13 @@ def main() -> None:
 
     print(f"\ndetail_pages={len(raw_books)}")
     print(f"Raw records saved to: {raw_output}")
+    valid_books, errors = validate_raw_books(raw_books)
+    save_validated_books(valid_books, errors)
+
+    print(f"valid_records={len(valid_books)}")
+    print(f"invalid_records={len(errors)}")
+    print(f"Validated books saved to: {OUTPUT_DIR / 'books.json'}")
+    print(f"Errors saved to: {OUTPUT_DIR / 'errors.json'}")
 
 
 if __name__ == "__main__":
