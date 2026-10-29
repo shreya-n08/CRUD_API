@@ -1,3 +1,6 @@
+
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from time import sleep
 from urllib.parse import urljoin
@@ -7,6 +10,8 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://books.toscrape.com/"
 CACHE_DIR = Path(__file__).resolve().parents[1] / "cache"
+OUTPUT_DIR = Path(__file__).resolve().parents[1] / "output"
+
 TIMEOUT_SECONDS = 10
 REQUEST_DELAY_SECONDS = 0.5
 MAX_CATALOGUE_PAGES = 3
@@ -14,7 +19,8 @@ MAX_CATALOGUE_PAGES = 3
 HEADERS = {
     "User-Agent": (
         "FlyRankInternship-A9/1.0 "
-        "(educational scraper; contact: add-your-repo-link)"
+        "(educational scraper; contact: "
+        "https://github.com/shreya-n08/CRUD_API)"
     )
 }
 
@@ -27,9 +33,8 @@ def fetch_page(url: str, cache_file: Path) -> str:
         print(f"Response size: {len(content)} bytes")
         return content.decode("utf-8")
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Be polite before every live request after the first one.
     if getattr(fetch_page, "has_requested", False):
         sleep(REQUEST_DELAY_SECONDS)
 
@@ -47,17 +52,17 @@ def fetch_page(url: str, cache_file: Path) -> str:
             response=response,
         )
 
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
     cache_file.write_bytes(response.content)
 
     print(f"HTTP status: {response.status_code}")
     print(f"Cached HTML: {cache_file}")
     print(f"Response size: {len(response.content)} bytes")
+
     return response.content.decode("utf-8")
 
 
 def discover_catalogue_pages() -> list[tuple[str, str]]:
-    """Follow the site's Next link for at most three catalogue pages."""
+    """Follow the Next link for at most three catalogue pages."""
     pages = []
     current_url = BASE_URL
 
@@ -74,7 +79,7 @@ def discover_catalogue_pages() -> list[tuple[str, str]]:
 
         if next_link is None or not next_link.get("href"):
             raise RuntimeError(
-                f"Could not find the Next link on catalogue page {page_number}"
+                f"Could not find the Next link on page {page_number}"
             )
 
         current_url = urljoin(current_url, next_link["href"])
@@ -84,30 +89,107 @@ def discover_catalogue_pages() -> list[tuple[str, str]]:
 
 def discover_book_urls(
     catalogue_pages: list[tuple[str, str]],
-) -> list[str]:
-    """Extract and deduplicate book detail URLs in catalogue order."""
-    unique_urls = []
+) -> list[tuple[str, str]]:
+    """Return unique product URLs with the catalogue page that listed them."""
+    discovered = []
+    seen_urls = set()
 
-    for page_url, html in catalogue_pages:
+    for source_page, html in catalogue_pages:
         soup = BeautifulSoup(html, "html.parser")
 
         for link in soup.select("article.product_pod h3 a"):
             href = link.get("href")
-            if href:
-                product_url = urljoin(page_url, href)
-                if product_url not in unique_urls:
-                    unique_urls.append(product_url)
+            if not href:
+                continue
 
-    return unique_urls
+            product_url = urljoin(source_page, href)
+
+            if product_url not in seen_urls:
+                seen_urls.add(product_url)
+                discovered.append((product_url, source_page))
+
+    return discovered
+
+
+def extract_book(
+    product_url: str,
+    source_page: str,
+    html: str,
+) -> dict:
+    """Extract the eight required raw fields from one book page."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    title_element = soup.select_one("div.product_main h1")
+    price_element = soup.select_one("p.price_color")
+    availability_element = soup.select_one("p.instock.availability")
+    rating_element = soup.select_one("p.star-rating")
+
+    description_heading = soup.find(id="product_description")
+    description_element = (
+        description_heading.find_next("p")
+        if description_heading
+        else None
+    )
+
+    rating_classes = rating_element.get("class", []) if rating_element else []
+    rating_text = (
+        next((value for value in rating_classes if value != "star-rating"), None)
+    )
+
+    return {
+        "title": (
+            title_element.get_text(" ", strip=True)
+            if title_element else None
+        ),
+        "product_url": product_url,
+        "price_text": (
+            price_element.get_text(" ", strip=True)
+            if price_element else None
+        ),
+        "availability_text": (
+            availability_element.get_text(" ", strip=True)
+            if availability_element else None
+        ),
+        "rating_text": rating_text,
+        "description": (
+            description_element.get_text(" ", strip=True)
+            if description_element else None
+        ),
+        "source_page": source_page,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def main() -> None:
-    pages = discover_catalogue_pages()
-    book_urls = discover_book_urls(pages)
+    catalogue_pages = discover_catalogue_pages()
+    discovered_books = discover_book_urls(catalogue_pages)
 
-    print(f"catalogue_pages={len(pages)}")
-    print(f"discovered={len(book_urls)}")
-    print(f"unique_urls={len(set(book_urls))}")
+    print(f"catalogue_pages={len(catalogue_pages)}")
+    print(f"discovered={len(discovered_books)}")
+    print(f"unique_urls={len({url for url, _ in discovered_books})}")
+
+    raw_books = []
+
+    for index, (product_url, source_page) in enumerate(discovered_books, start=1):
+        slug = product_url.rstrip("/").split("/")[-2]
+        cache_file = CACHE_DIR / "details" / f"{slug}.html"
+
+        html = fetch_page(product_url, cache_file)
+        raw_books.append(extract_book(product_url, source_page, html))
+
+        if index == 1:
+            print("\nFirst complete raw record:")
+            print(json.dumps(raw_books[0], indent=2, ensure_ascii=False))
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    raw_output = OUTPUT_DIR / "raw-books.json"
+    raw_output.write_text(
+        json.dumps(raw_books, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print(f"\ndetail_pages={len(raw_books)}")
+    print(f"Raw records saved to: {raw_output}")
 
 
 if __name__ == "__main__":
