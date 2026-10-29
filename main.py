@@ -1,9 +1,23 @@
-from fastapi import FastAPI, HTTPException, status
+from dotenv import load_dotenv
+from supabase import create_client, Client
+from pydantic import EmailStr
+from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 import sqlite3
 import os
 from pathlib import Path
 
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Supabase environment variables are missing")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "inventory.db"
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", str(DEFAULT_DATABASE_PATH)))
@@ -57,18 +71,164 @@ class Item(ItemBase):
 class ItemUpdate(ItemBase):
     pass
 
+class AuthRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
 app = FastAPI(
     title="My Inventory API",
     description="This API allows you to manage your inventory items.",
     version="1.0.0",
 )
 
+security = HTTPBearer(auto_error=False)
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    if credentials is None:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Access token required"},
+        )
+
+    token = credentials.credentials
+
+    try:
+        response = supabase.auth.get_user(token)
+        user = response.user
+
+        if user is None:
+            raise ValueError("No user returned")
+
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "user_metadata": user.user_metadata,
+        }
+
+    except Exception as exc:
+     print(f"Token validation error: {type(exc).__name__}: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"error": "Invalid or expired token"},
+    )
+
+@app.post("/auth/signup", status_code=status.HTTP_201_CREATED)
+def signup(auth_data: AuthRequest):
+    try:
+        response = supabase.auth.sign_up({
+            "email": str(auth_data.email),
+            "password": auth_data.password,
+        })
+
+        if response.user is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Signup failed",
+            )
+
+        return {
+            "message": "Signup successful. Check your email if confirmation is required.",
+            "user": {
+                "id": str(response.user.id),
+                "email": response.user.email,
+            },
+        }
+
+    except Exception as exc:
+      print(f"Signup error: {type(exc).__name__}: {exc}")
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Signup failed. Check the server terminal for the error.",
+    )
+
+@app.post("/auth/login")
+def login(auth_data: AuthRequest):
+    try:
+        response = supabase.auth.sign_in_with_password({
+            "email": str(auth_data.email),
+            "password": auth_data.password,
+        })
+
+        session = response.session
+
+        if session is None:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid login credentials"},
+            )
+
+        return {
+            "access_token": session.access_token,
+            "refresh_token": session.refresh_token,
+            "token_type": "bearer",
+        }
+
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+           content={"error": "Invalid login credentials"},
+        )
+
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    current_user: dict = Depends(get_current_user),
+    logout_data: LogoutRequest | None = None,
+):
+    if isinstance(current_user, JSONResponse):
+        return current_user
+
+    if credentials is None:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Access token required"},
+        )
+
+    if logout_data is None or not logout_data.refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refresh token required",
+        )
+
+    try:
+        logout_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logout_client.auth.set_session(
+            credentials.credentials,
+            logout_data.refresh_token,
+        )
+        logout_client.auth.sign_out()
+        return None
+
+    except Exception as exc:
+      print(f"Logout error: {type(exc).__name__}: {exc}")
+    return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Invalid or expired token"},
+        )
+
+
+@app.get("/protected/profile")
+def protected_profile(
+    current_user: dict = Depends(get_current_user),
+):
+    if isinstance(current_user, JSONResponse):
+        return current_user
+
+    return {
+        "message": "Authenticated profile",
+        "user": current_user,
+    }
+
 items: list[Item] = [
     Item(id=1, name="Dell Laptop", quantity=10),
     Item(id=2, name="HP Laptop", quantity=5),
     Item(id=3, name="Lenovo Laptop", quantity=8),
 ]
-
 
 @app.get("/", description="This API allows you to manage your inventory items.")
 def read_root():
@@ -83,6 +243,12 @@ def read_root():
 @app.get("/health", description="Check whether the API is running.")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/public/info")
+def public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
 
 @app.get(
     "/items",
